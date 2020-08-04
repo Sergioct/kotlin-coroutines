@@ -25,7 +25,11 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 
 /**
@@ -76,12 +80,6 @@ class PlantListViewModel internal constructor(
 
     private val growZoneChannel = ConflatedBroadcastChannel<GrowZone>()
 
-    init {
-        // When creating a new ViewModel, clear the grow zone and perform any related udpates
-        clearGrowZoneNumber()
-        launchDataLoad { plantRepository.tryUpdateRecentPlantsCache() }
-    }
-
     val plantsUsingFlow: LiveData<List<Plant>> = growZoneChannel.asFlow()
         .flatMapLatest { growZone ->
             if (growZone == NoGrowZone) {
@@ -90,6 +88,23 @@ class PlantListViewModel internal constructor(
                 plantRepository.getPlantsWithGrowZoneFlow(growZone)
             }
         }.asLiveData()
+
+    init {
+        // When creating a new ViewModel, clear the grow zone and perform any related udpates
+        clearGrowZoneNumber()
+        growZoneChannel.asFlow()
+            .mapLatest { growZone ->
+                _spinner.value = true
+                if (growZone == NoGrowZone) {
+                    plantRepository.tryUpdateRecentPlantsCache()
+                } else {
+                    plantRepository.tryUpdateRecentPlantsForGrowZoneCache(growZone)
+                }
+            }
+            .onCompletion {  _spinner.value = false }
+            .catch { throwable ->  _snackbar.value = throwable.message  }
+            .launchIn(viewModelScope)
+    }
 
     /**
      * Filter the list to this grow zone.
